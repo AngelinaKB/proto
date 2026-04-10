@@ -28,26 +28,38 @@ class Settings(BaseSettings):
     # Column schema: table:col1,col2,...|table:col1,col2,...
     app_table_columns: str
 
+    # CORS
+    app_cors_origins: str = "*"
+    app_cors_methods: str = "*"
+    app_cors_headers: str = "*"
+
     @property
     def allowed_tables(self) -> List[str]:
         return [t.strip().lower() for t in self.app_allowed_tables.split(",") if t.strip()]
 
     @property
     def column_map(self) -> Dict[str, List[str]]:
-        """
-        Parses APP_TABLE_COLUMNS into {table_name: [col1, col2, ...]}.
-        Format: table:col1,col2|table:col1,col2
-        """
         result: Dict[str, List[str]] = {}
         for entry in self.app_table_columns.split("|"):
             entry = entry.strip()
             if not entry or ":" not in entry:
                 continue
             table, _, cols_raw = entry.partition(":")
-            table = table.strip().lower()
             cols = [c.strip() for c in cols_raw.split(",") if c.strip()]
-            result[table] = cols
+            result[table.strip().lower()] = cols
         return result
+
+    @property
+    def cors_origins(self) -> List[str]:
+        return [o.strip() for o in self.app_cors_origins.split(",") if o.strip()]
+
+    @property
+    def cors_methods(self) -> List[str]:
+        return [m.strip() for m in self.app_cors_methods.split(",") if m.strip()]
+
+    @property
+    def cors_headers(self) -> List[str]:
+        return [h.strip() for h in self.app_cors_headers.split(",") if h.strip()]
 
     @property
     def postgres_dsn(self) -> str:
