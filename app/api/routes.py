@@ -8,11 +8,9 @@ from app.services.sql_generator import generate_sql, UnsupportedQuestionError
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-
 @router.post("/ask", response_model=AskResponse)
 async def ask(request: AskRequest) -> AskResponse:
 
-    # ── Step 1: Preprocess input ───────────────────────────────────────────────
     try:
         question = preprocess(request.question)
     except InputValidationError as e:
@@ -20,7 +18,6 @@ async def ask(request: AskRequest) -> AskResponse:
 
     logger.info("Question received: %s", question)
 
-    # ── Step 2: Generate SQL ───────────────────────────────────────────────────
     try:
         sql = generate_sql(question)
     except UnsupportedQuestionError as e:
@@ -31,7 +28,6 @@ async def ask(request: AskRequest) -> AskResponse:
 
     logger.info("Generated SQL: %s", sql)
 
-    # Phase 1 response — return SQL for inspection before proceeding
     return AskResponse(
         status="success",
         sql=sql if settings.app_show_sql else None,
