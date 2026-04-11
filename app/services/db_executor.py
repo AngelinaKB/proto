@@ -37,11 +37,12 @@ def _resolve_connection(sql: str) -> dict:
     raise ValueError("Could not resolve a database connection for this query.")
 
 
-def _apply_casts(sql: str) -> str:
+def apply_casts(sql: str) -> str:
     """
     Wrap varchar-stored timestamp columns in CAST(col AS timestamp),
-    but only in WHERE / AND / OR / ON / HAVING / ORDER BY clauses —
-    not in the SELECT column list, which would strip the column name.
+    only in WHERE / AND / OR / ON / HAVING / ORDER BY clauses —
+    not in the SELECT list, which would strip the column name.
+    Exported so routes.py can return the final SQL to the client.
     """
     cast_map = settings.timestamp_cast_columns
     lower_sql = sql.lower()
@@ -72,21 +73,27 @@ class DBExecutionError(Exception):
     pass
 
 
-def execute_query(sql: str) -> tuple[list[dict], float]:
+def execute_query(sql: str) -> tuple[list[dict], str, float]:
+    """
+    1. Resolve which DB pool to use.
+    2. Apply varchar → timestamp casts.
+    3. Execute and return (rows, final_sql, elapsed_seconds).
+       final_sql is the cast-normalised SQL actually sent to the DB.
+    """
     try:
         conn_kwargs = _resolve_connection(sql)
     except ValueError as e:
         raise DBExecutionError(str(e)) from e
 
-    sql = _apply_casts(sql)
-    logger.info("SQL after cast normalisation:\n%s", sql)
+    final_sql = apply_casts(sql)
+    logger.info("SQL after cast normalisation:\n%s", final_sql)
 
     pool = _get_pool(conn_kwargs)
     conn = pool.getconn()
     start = time.perf_counter()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(sql)
+            cur.execute(final_sql)
             rows = [dict(row) for row in cur.fetchall()]
         conn.rollback()
     except psycopg2.Error as e:
@@ -98,4 +105,4 @@ def execute_query(sql: str) -> tuple[list[dict], float]:
 
     elapsed = time.perf_counter() - start
     logger.info("Query executed in %.3fs, returned %d rows.", elapsed, len(rows))
-    return rows, elapsed
+    return rows, final_sql, elapsed
