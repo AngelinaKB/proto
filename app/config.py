@@ -9,12 +9,21 @@ class Settings(BaseSettings):
     openai_max_tokens: int = 1000
     openai_temperature: float = 0.0
 
-    # Postgres
-    postgres_host: str
-    postgres_port: int = 5432
-    postgres_db: str
-    postgres_user: str
-    postgres_password: str
+    # Database 1
+    db1_host: str
+    db1_port: int = 5432
+    db1_name: str
+    db1_user: str
+    db1_password: str
+    db1_tables: str  # comma-separated table names routed to this DB
+
+    # Database 2
+    db2_host: str
+    db2_port: int = 5432
+    db2_name: str
+    db2_user: str
+    db2_password: str
+    db2_tables: str  # comma-separated table names routed to this DB
 
     # App
     app_max_sql_limit: int = 500
@@ -23,8 +32,6 @@ class Settings(BaseSettings):
     app_max_query_length: int = 1000
     app_allowed_tables: str
     app_table_columns: str
-
-    # Columns stored as varchar that require CAST(col AS timestamp) for time filters
     app_timestamp_cast_columns: str = ""
 
     # CORS
@@ -32,7 +39,7 @@ class Settings(BaseSettings):
     app_cors_methods: str = "*"
     app_cors_headers: str = "*"
 
-    # DB connection pool
+    # DB connection pool (per database)
     app_db_pool_min: int = 1
     app_db_pool_max: int = 10
 
@@ -54,7 +61,6 @@ class Settings(BaseSettings):
 
     @property
     def timestamp_cast_columns(self) -> Dict[str, List[str]]:
-        """Returns {table: [col1, col2]} for columns that need CAST(col AS timestamp)."""
         result: Dict[str, List[str]] = {}
         if not self.app_timestamp_cast_columns:
             return result
@@ -68,6 +74,26 @@ class Settings(BaseSettings):
         return result
 
     @property
+    def db_routing(self) -> Dict[str, dict]:
+        """
+        Returns a map of table_name -> DB connection kwargs.
+        Used by db_executor to pick the right pool per query.
+        """
+        routing: Dict[str, dict] = {}
+        for db_num, tables_raw, host, port, name, user, password in [
+            (1, self.db1_tables, self.db1_host, self.db1_port, self.db1_name, self.db1_user, self.db1_password),
+            (2, self.db2_tables, self.db2_host, self.db2_port, self.db2_name, self.db2_user, self.db2_password),
+        ]:
+            for table in tables_raw.split(","):
+                table = table.strip().lower()
+                if table:
+                    routing[table] = dict(
+                        host=host, port=port, dbname=name,
+                        user=user, password=password,
+                    )
+        return routing
+
+    @property
     def cors_origins(self) -> List[str]:
         return [o.strip() for o in self.app_cors_origins.split(",") if o.strip()]
 
@@ -78,13 +104,6 @@ class Settings(BaseSettings):
     @property
     def cors_headers(self) -> List[str]:
         return [h.strip() for h in self.app_cors_headers.split(",") if h.strip()]
-
-    @property
-    def postgres_dsn(self) -> str:
-        return (
-            f"postgresql://{self.postgres_user}:{self.postgres_password}"
-            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
-        )
 
     class Config:
         env_file = ".env"
