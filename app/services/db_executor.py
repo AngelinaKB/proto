@@ -44,6 +44,9 @@ def apply_casts(sql: str) -> str:
     WHERE / AND / OR / ORDER BY / HAVING lines only.
     Skips lines that already contain cast() to avoid double-wrapping.
     """
+    # Normalize escaped newlines (LLM sometimes returns \\n instead of real newlines)
+    sql = sql.replace('\\n', '\n').replace('\\r\\n', '\n').replace('\\r', '\n')
+
     cast_map = settings.timestamp_cast_columns
     lower_sql = sql.lower()
 
