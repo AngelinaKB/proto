@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     app_allowed_tables: str
     app_table_columns: str
 
+    # Columns stored as varchar that require CAST(col AS timestamp) for time filters
+    app_timestamp_cast_columns: str = ""
+
     # CORS
     app_cors_origins: str = "*"
     app_cors_methods: str = "*"
@@ -41,6 +44,21 @@ class Settings(BaseSettings):
     def column_map(self) -> Dict[str, List[str]]:
         result: Dict[str, List[str]] = {}
         for entry in self.app_table_columns.split("|"):
+            entry = entry.strip()
+            if not entry or ":" not in entry:
+                continue
+            table, _, cols_raw = entry.partition(":")
+            cols = [c.strip() for c in cols_raw.split(",") if c.strip()]
+            result[table.strip().lower()] = cols
+        return result
+
+    @property
+    def timestamp_cast_columns(self) -> Dict[str, List[str]]:
+        """Returns {table: [col1, col2]} for columns that need CAST(col AS timestamp)."""
+        result: Dict[str, List[str]] = {}
+        if not self.app_timestamp_cast_columns:
+            return result
+        for entry in self.app_timestamp_cast_columns.split("|"):
             entry = entry.strip()
             if not entry or ":" not in entry:
                 continue
