@@ -39,10 +39,10 @@ def _resolve_connection(sql: str) -> dict:
 
 def apply_casts(sql: str) -> str:
     """
-    Wrap varchar-stored timestamp columns in CAST(col AS timestamp),
-    only in WHERE / AND / OR / ON / HAVING / ORDER BY clauses —
-    not in the SELECT list, which would strip the column name.
-    Exported so routes.py can return the final SQL to the client.
+    Wrap varchar-stored timestamp columns in CAST(col AS timestamp).
+    Works line by line — skips the SELECT list, applies casts in
+    WHERE / AND / OR / ORDER BY / HAVING lines only.
+    Skips lines that already contain cast() to avoid double-wrapping.
     """
     cast_map = settings.timestamp_cast_columns
     lower_sql = sql.lower()
@@ -51,20 +51,26 @@ def apply_casts(sql: str) -> str:
         if table not in lower_sql:
             continue
         for col in cols:
-            pattern = re.compile(
-                rf'((?:WHERE|AND|OR|ON|HAVING|BY)\s+(?:.*?\s+)?)(?<!cast\(){re.escape(col)}\b(?!\s*as\b)',
-                re.IGNORECASE
-            )
-            sql = pattern.sub(
-                lambda m, c=col: m.group(0).replace(
-                    re.search(
-                        rf'(?<!cast\(){re.escape(c)}\b(?!\s*as\b)',
-                        m.group(0), re.IGNORECASE
-                    ).group(0),
-                    f'CAST({c} AS timestamp)'
-                ),
-                sql
-            )
+            lines = sql.split('\n')
+            new_lines = []
+            in_select = True
+            for line in lines:
+                upper_line = line.upper().lstrip()
+                if upper_line.startswith('FROM'):
+                    in_select = False
+                if (
+                    not in_select
+                    and re.search(rf'\b{re.escape(col)}\b', line, re.IGNORECASE)
+                    and 'cast(' not in line.lower()
+                ):
+                    line = re.sub(
+                        rf'\b{re.escape(col)}\b',
+                        f'CAST({col} AS timestamp)',
+                        line,
+                        flags=re.IGNORECASE,
+                    )
+                new_lines.append(line)
+            sql = '\n'.join(new_lines)
 
     return sql
 
@@ -78,7 +84,6 @@ def execute_query(sql: str) -> tuple[list[dict], str, float]:
     1. Resolve which DB pool to use.
     2. Apply varchar → timestamp casts.
     3. Execute and return (rows, final_sql, elapsed_seconds).
-       final_sql is the cast-normalised SQL actually sent to the DB.
     """
     try:
         conn_kwargs = _resolve_connection(sql)
