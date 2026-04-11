@@ -5,6 +5,7 @@ from app.config import settings
 from app.services.input_preprocessor import preprocess, InputValidationError
 from app.services.sql_generator import generate_sql, UnsupportedQuestionError
 from app.services.sql_validator import validate_sql, SQLValidationError
+from app.services.db_executor import execute_query, DBExecutionError
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -41,8 +42,18 @@ async def ask(request: AskRequest) -> AskResponse:
 
     logger.info("SQL passed validation.")
 
-    # Phase 2 response — SQL generated and validated, not yet executed
+    # ── Step 4: Execute SQL ────────────────────────────────────────────────────
+    try:
+        rows, exec_time = execute_query(sql)
+    except DBExecutionError as e:
+        logger.error("DB execution error: %s", e)
+        return AskResponse(status="error", error=str(e))
+
+    logger.info("Returned %d rows in %.3fs.", len(rows), exec_time)
+
+    # Phase 3 response — real rows, no summary yet
     return AskResponse(
         status="success",
+        rows=rows,
         sql=sql if settings.app_show_sql else None,
     )
