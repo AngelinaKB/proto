@@ -8,7 +8,6 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# One pool per DB key — populated lazily on first use
 _pools: dict[str, psycopg2.pool.ThreadedConnectionPool] = {}
 
 
@@ -30,10 +29,6 @@ def _get_pool(conn_kwargs: dict) -> psycopg2.pool.ThreadedConnectionPool:
 
 
 def _resolve_connection(sql: str) -> dict:
-    """
-    Match the SQL against the routing table to find which DB to connect to.
-    Raises ValueError if no matching table is found.
-    """
     lower_sql = sql.lower()
     for table, conn_kwargs in settings.db_routing.items():
         if table in lower_sql:
@@ -44,11 +39,9 @@ def _resolve_connection(sql: str) -> dict:
 
 def _apply_casts(sql: str) -> str:
     """
-    Programmatically wrap varchar-stored timestamp columns in CAST(col AS timestamp).
-    This is a safety net — the LLM prompt already instructs casting, but this
-    guarantees correctness regardless of what the LLM produces.
-
-    Only wraps bare column references — skips columns already inside a CAST().
+    Wrap varchar-stored timestamp columns in CAST(col AS timestamp),
+    but only in WHERE / AND / OR / ON / HAVING / ORDER BY clauses —
+    not in the SELECT column list, which would strip the column name.
     """
     cast_map = settings.timestamp_cast_columns
     lower_sql = sql.lower()
@@ -57,13 +50,20 @@ def _apply_casts(sql: str) -> str:
         if table not in lower_sql:
             continue
         for col in cols:
-            # Match bare column name not already inside CAST(...)
-            # Negative lookbehind for 'cast(' and lookahead for not being inside parens
             pattern = re.compile(
-                rf'(?<!cast\(){re.escape(col)}(?!\s*as\s)',
+                rf'((?:WHERE|AND|OR|ON|HAVING|BY)\s+(?:.*?\s+)?)(?<!cast\(){re.escape(col)}\b(?!\s*as\b)',
                 re.IGNORECASE
             )
-            sql = pattern.sub(f"CAST({col} AS timestamp)", sql)
+            sql = pattern.sub(
+                lambda m, c=col: m.group(0).replace(
+                    re.search(
+                        rf'(?<!cast\(){re.escape(c)}\b(?!\s*as\b)',
+                        m.group(0), re.IGNORECASE
+                    ).group(0),
+                    f'CAST({c} AS timestamp)'
+                ),
+                sql
+            )
 
     return sql
 
@@ -73,20 +73,13 @@ class DBExecutionError(Exception):
 
 
 def execute_query(sql: str) -> tuple[list[dict], float]:
-    """
-    1. Resolve which DB pool to use based on the table in the SQL.
-    2. Apply any required varchar → timestamp casts programmatically.
-    3. Execute and return (rows, elapsed_seconds).
-    """
-    # Resolve connection
     try:
         conn_kwargs = _resolve_connection(sql)
     except ValueError as e:
         raise DBExecutionError(str(e)) from e
 
-    # Apply casts
     sql = _apply_casts(sql)
-    logger.info("SQL after cast normalisation: %s", sql)
+    logger.info("SQL after cast normalisation:\n%s", sql)
 
     pool = _get_pool(conn_kwargs)
     conn = pool.getconn()
@@ -95,7 +88,7 @@ def execute_query(sql: str) -> tuple[list[dict], float]:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(sql)
             rows = [dict(row) for row in cur.fetchall()]
-        conn.rollback()  # read-only — always rollback
+        conn.rollback()
     except psycopg2.Error as e:
         logger.error("DB execution error: %s", e)
         conn.rollback()
