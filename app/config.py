@@ -21,17 +21,17 @@ class Settings(BaseSettings):
     app_default_sql_limit: int = 100
     app_show_sql: bool = True
     app_max_query_length: int = 1000
-
-    # Comma-separated fully-qualified table names
     app_allowed_tables: str
-
-    # Column schema: table:col1,col2,...|table:col1,col2,...
     app_table_columns: str
 
     # CORS
     app_cors_origins: str = "*"
     app_cors_methods: str = "*"
     app_cors_headers: str = "*"
+
+    # DB connection pool
+    app_db_pool_min: int = 1
+    app_db_pool_max: int = 10
 
     @property
     def allowed_tables(self) -> List[str]:
