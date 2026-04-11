@@ -44,16 +44,15 @@ async def ask(request: AskRequest) -> AskResponse:
 
     # ── Step 4: Execute SQL ────────────────────────────────────────────────────
     try:
-        rows, exec_time = execute_query(sql)
+        rows, final_sql, exec_time = execute_query(sql)
     except DBExecutionError as e:
         logger.error("DB execution error: %s", e)
         return AskResponse(status="error", error=str(e))
 
     logger.info("Returned %d rows in %.3fs.", len(rows), exec_time)
 
-    # Phase 3 response — real rows, no summary yet
     return AskResponse(
         status="success",
         rows=rows,
-        sql=sql if settings.app_show_sql else None,
+        sql=final_sql if settings.app_show_sql else None,
     )
