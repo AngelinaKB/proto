@@ -1,7 +1,7 @@
 """
 Builds the SQL generation prompt.
-All table names and column schema are injected at runtime from settings —
-nothing is hardcoded here.
+All table names, column schema, and cast rules are injected at runtime from
+settings — nothing is hardcoded here.
 """
 
 from app.config import settings
@@ -19,8 +19,33 @@ def _build_tables_block() -> str:
     return "\n".join(lines)
 
 
+def _build_cast_rules() -> str:
+    """
+    Builds a section listing which columns must be cast to timestamp.
+    Returns empty string if no cast columns are configured.
+    """
+    cast_map = settings.timestamp_cast_columns
+    if not cast_map:
+        return ""
+
+    lines = ["## COLUMN TYPE CASTING", ""]
+    lines.append("The following columns are stored as varchar and MUST be cast to")
+    lines.append("timestamp before any date/time comparison or ordering:")
+    lines.append("")
+    for table, cols in cast_map.items():
+        for col in cols:
+            lines.append(f"- {table}.{col} → use CAST({col} AS timestamp)")
+    lines.append("")
+    lines.append("ALWAYS wrap these columns in CAST(col AS timestamp) when used in:")
+    lines.append("WHERE clauses, ORDER BY, DATE_TRUNC(), or any time comparison.")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _build_examples() -> str:
     default = settings.app_default_sql_limit
+    cast_map = settings.timestamp_cast_columns
+
     log_table = next(
         (t for t in settings.allowed_tables if "customreportlog" in t), ""
     )
@@ -28,27 +53,38 @@ def _build_examples() -> str:
         (t for t in settings.allowed_tables if "flowserviceinformation" in t), ""
     )
 
+    # Determine which columns need casting for each table
+    log_casts = set(cast_map.get(log_table, []))
+    svc_casts = set(cast_map.get(svc_table, []))
+
+    def col(table_casts: set, name: str) -> str:
+        """Wrap column in CAST if it needs it."""
+        return f"CAST({name} AS timestamp)" if name in table_casts else name
+
+    log_logtime = col(log_casts, "logtime")
+    svc_lastrunutc = col(svc_casts, "lastrunutc")
+
     return f"""
 Q: What failed last night?
 SQL: SELECT reportname, stepname, logtime, error, status, jobid
 FROM {log_table}
 WHERE status ILIKE 'fail%'
-  AND logtime >= NOW() - INTERVAL '1 day'
-ORDER BY logtime DESC
+  AND {log_logtime} >= NOW() - INTERVAL '1 day'
+ORDER BY {log_logtime} DESC
 LIMIT {default};
 
 Q: Which services haven't run in the last 7 days?
 SQL: SELECT servicename, status, lastrunutc, servername, packagename
 FROM {svc_table}
-WHERE lastrunutc IS NULL
-  OR lastrunutc < NOW() - INTERVAL '7 days'
-ORDER BY lastrunutc NULLS FIRST
+WHERE {svc_lastrunutc} IS NULL
+  OR {svc_lastrunutc} < NOW() - INTERVAL '7 days'
+ORDER BY {svc_lastrunutc} NULLS FIRST
 LIMIT {default};
 
 Q: What are the most common errors this week?
 SQL: SELECT error, COUNT(*) AS error_count
 FROM {log_table}
-WHERE logtime >= DATE_TRUNC('week', NOW())
+WHERE {log_logtime} >= DATE_TRUNC('week', NOW())
   AND error IS NOT NULL
   AND TRIM(error) <> ''
 GROUP BY error
@@ -72,18 +108,18 @@ Q: Which jobs are running right now?
 SQL: SELECT reportname, stepname, logtime, status, jobid
 FROM {log_table}
 WHERE status ILIKE 'running%'
-ORDER BY logtime DESC
+ORDER BY {log_logtime} DESC
 LIMIT {default};
 
 Q: Compare failures this week versus last week by report.
 SQL: SELECT reportname,
        COUNT(*) FILTER (
-         WHERE logtime >= DATE_TRUNC('week', NOW())
+         WHERE {log_logtime} >= DATE_TRUNC('week', NOW())
            AND status ILIKE 'fail%'
        ) AS failures_this_week,
        COUNT(*) FILTER (
-         WHERE logtime >= DATE_TRUNC('week', NOW()) - INTERVAL '7 days'
-           AND logtime < DATE_TRUNC('week', NOW())
+         WHERE {log_logtime} >= DATE_TRUNC('week', NOW()) - INTERVAL '7 days'
+           AND {log_logtime} < DATE_TRUNC('week', NOW())
            AND status ILIKE 'fail%'
        ) AS failures_last_week
 FROM {log_table}
@@ -107,6 +143,7 @@ SQL: CANNOT_GENERATE: The request is too broad or ambiguous. Ask a more specific
 
 def build_sql_prompt(question: str) -> str:
     tables_block = _build_tables_block()
+    cast_rules = _build_cast_rules()
     examples = _build_examples()
     default = settings.app_default_sql_limit
     max_limit = settings.app_max_sql_limit
@@ -160,6 +197,7 @@ time-based comparisons, trends, error frequency analysis, service metadata looku
 
 {tables_block}
 
+{cast_rules}
 ## QUERY GUIDELINES
 
 - Use ILIKE for case-insensitive string matching
